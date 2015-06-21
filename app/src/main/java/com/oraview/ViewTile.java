@@ -11,7 +11,9 @@ import android.graphics.Point;
 import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.RectF;
-import android.os.AsyncTask;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Message;
 import android.util.AttributeSet;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
@@ -26,6 +28,8 @@ import org.xml.sax.SAXException;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -35,6 +39,7 @@ import javax.xml.parsers.ParserConfigurationException;
 
 public class ViewTile extends View {
     private static final int TILE_SIZE = 512;
+    private static final int MESSAGE_INVALIDATE = 5;
     ArrayList<Layer> mLayers = new ArrayList<>();
     ZipFile mZipFile;
     GestureDetector mGestureDetector;
@@ -47,6 +52,9 @@ public class ViewTile extends View {
     PositionedBitmap mBitmaps[][] = null;
     private int mTileCountX;
     private int mTileCountY;
+    private Executor mExecutor;
+    private Handler mHandler;
+
 
 
     public ViewTile(Context context) {
@@ -134,6 +142,22 @@ public class ViewTile extends View {
         mPosition = new PointF(0.0f, 0.0f);
         mScale = 1.0f;
         mImageSize = new Point(0, 0);
+        mExecutor = Executors.newFixedThreadPool(8);
+        mHandler = new Handler(Looper.getMainLooper()) {
+            @Override
+            public void handleMessage(Message msg) {
+                switch (msg.what) {
+                    case MESSAGE_INVALIDATE:
+                        invalidate();
+                        break;
+                    default:
+                        super.handleMessage(msg);
+                        break;
+                }
+
+            }
+        };
+
     }
 
     @Override
@@ -149,12 +173,12 @@ public class ViewTile extends View {
             mBitmaps = new PositionedBitmap[mTileCountX][mTileCountY];
             for (int i = 0; i < mBitmaps.length; ++i) {
                 for (int j = 0; j < mBitmaps[i].length; ++j) {
-                    mBitmaps[i][j] = new PositionedBitmap(0, 0, Bitmap.createBitmap(TILE_SIZE, TILE_SIZE, Bitmap.Config.ARGB_8888));
+                    mBitmaps[i][j] = new PositionedBitmap(-1, -1, Bitmap.createBitmap(TILE_SIZE, TILE_SIZE, Bitmap.Config.ARGB_8888));
                 }
             }
         }
         if (mNewImage) {
-            mScale = Math.min((float) canvas.getWidth() / mImageSize.x, (float) canvas.getHeight() / mImageSize.y);
+            mScale = 0.5f;//Math.min((float) canvas.getWidth() / mImageSize.x, (float) canvas.getHeight() / mImageSize.y); //TODO put in stuff <--
 
             mNewImage = false;
         }
@@ -168,7 +192,7 @@ public class ViewTile extends View {
         for (int i = 0; i < mTileCountX; ++i) {
             for (int j = 0; j < mTileCountY; ++j) {
                 if (!mBitmaps[i][j].comparePosition(i, j)) {
-                    new ImageRenderer(i, j).executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+                    mExecutor.execute(new ImageLoadRunnable(i, j));
                     continue;
                 }
                 Matrix lm = new Matrix(m);
@@ -213,17 +237,17 @@ public class ViewTile extends View {
 
     }
 
-    class ImageRenderer extends AsyncTask<Void, Void, Void> {
+    class ImageLoadRunnable implements Runnable {
         private int mXpos, mYpos;
 
-        ImageRenderer(int xpos, int ypos) {
-            super();
+        ImageLoadRunnable(int xpos, int ypos) {
+            mBitmaps[xpos][ypos].setPosition(xpos, ypos);
             mXpos = xpos;
             mYpos = ypos;
         }
 
         @Override
-        protected Void doInBackground(Void... params) {
+        public void run() {
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inBitmap = Bitmap.createBitmap(TILE_SIZE, TILE_SIZE, Bitmap.Config.ARGB_8888);
 
@@ -249,14 +273,7 @@ public class ViewTile extends View {
                 //canvas.drawBitmap(bitmapLayer, 0.0f, 0.0f, null);
             }
             mBitmaps[mXpos][mYpos].getBitmap().prepareToDraw();
-
-
-            return null;
-        }
-
-        @Override
-        protected void onPostExecute(Void aVoid) {
-            invalidate();
+            mHandler.obtainMessage(MESSAGE_INVALIDATE).sendToTarget();
         }
     }
 }
